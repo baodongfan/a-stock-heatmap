@@ -1650,6 +1650,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
   const [boardFilter, setBoardFilter] = useState(allBoardsValue);
   const [trendFilter, setTrendFilter] = useState(allTrendsValue);
+  // 【新增状态】是否隐藏小市值股票（默认不隐藏 false）
+  const [hideSmallCap, setHideSmallCap] = useState(false);
   const [marketSummaries, setMarketSummaries] = useState<Partial<Record<MarketKey, MarketSummary>>>({});
   const [treemapData, setTreemapData] = useState<TreemapResponse | null>(null);
   const [quotes, setQuotes] = useState<QuoteMap>({});
@@ -2175,6 +2177,65 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     };
 
     let result = applyBoardFilter(treemapData);
+
+// 【新增核心过滤】应用小市值过滤逻辑，新增从这里开始⬇️
+    const applyCapFilter = (data: TreemapResponse) => {
+      if (!hideSmallCap) return data;
+
+      // 50亿阈值（需确保与后端或基础 baseline 里的单位一致，A股通常市值为元）
+      const CAP_THRESHOLD = 50_0000_0000; 
+
+      const filteredNodes = data.nodes.map((node) => {
+        const filteredChildren = node.children.filter((stock) => {
+          // 这里基础 baseline 数据通常带有市值字段，由于原始热力图的 value 代表权重（即市值）
+          // 我们可以直接拿 stock.value (即 getStockValue 算出的流通/总市值) 来判断
+          return stock.value >= CAP_THRESHOLD;
+        });
+
+        return {
+          ...node,
+          children: filteredChildren,
+          stockCount: filteredChildren.length,
+          value: filteredChildren.reduce((sum, stock) => sum + stock.value, 0),
+        };
+      }).filter((node) => node.children.length > 0);
+
+      // 重新计算全盘的涨跌家数与成交额总计
+      let advanceCount = 0;
+      let flatCount = 0;
+      let declineCount = 0;
+      let turnoverAmount = 0;
+      let totalStockCount = 0;
+
+      for (const node of filteredNodes) {
+        for (const stock of node.children) {
+          const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
+          if (changePct > flatThreshold) advanceCount += 1;
+          else if (changePct < -flatThreshold) declineCount += 1;
+          else flatCount += 1;
+
+          turnoverAmount += stock.turnoverAmount;
+          totalStockCount += 1;
+        }
+      }
+
+      return {
+        ...data,
+        stockCount: totalStockCount,
+        boardCount: filteredNodes.length,
+        summary: {
+          ...data.summary,
+          advanceCount,
+          flatCount,
+          declineCount,
+          turnoverAmount,
+        },
+        nodes: filteredNodes,
+      };
+    };
+
+    result = applyCapFilter(result);
+// 新增到这里结束⬆️
     result = applyTrendFilter(result);
     return result;
   }, [boardFilter, trendFilter, quotes, treemapData]);
@@ -3805,6 +3866,48 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     )}
                   >
                     {messages.fallingOnly}
+                  </button>
+                </div>
+              </div>
+
+              {/* 【新增 UI】市值筛选栏 */}
+              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
+                <label
+                  className={cn(
+                    "block font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+                    isEnglish ? "text-[9px]" : "text-[10px]"
+                  )}
+                >
+                  {isEnglish ? "Market Cap Filter" : "市值筛选"}
+                </label>
+                <div className="mt-1 grid grid-cols-2 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setHideSmallCap(false)}
+                    aria-pressed={!hideSmallCap}
+                    className={cn(
+                      "h-7 border text-center font-semibold leading-tight transition-colors",
+                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
+                      !hideSmallCap
+                        ? "border-brand/70 bg-brand/18 text-foreground"
+                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {isEnglish ? "All Caps" : "全部市值"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHideSmallCap(true)}
+                    aria-pressed={hideSmallCap}
+                    className={cn(
+                      "h-7 border text-center font-semibold leading-tight transition-colors",
+                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
+                      hideSmallCap
+                        ? "border-brand/70 bg-brand/18 text-foreground"
+                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {isEnglish ? "Large Cap (>50亿)" : "大中市值(>50亿)"}
                   </button>
                 </div>
               </div>
